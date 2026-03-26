@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fitness Tracker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #080810;
+      --surface: #0f0f1a;
+      --surface2: #161624;
+      --border: #1e1e32;
+      --border2: #2a2a42;
+      --text: #e8e8f0;
+      --muted: #4a4a6a;
+      --muted2: #2a2a42;
+      --orange: #ff6b2b;
+      --orange-dim: #ff6b2b22;
+      --cyan: #00e5ff;
+      --purple: #9b7fff;
+      --green: #00e5a0;
+      --red: #ff4466;
+      --yellow: #ffd166;
+      --font-mono: 'Space Mono', monospace;
+      --font-sans: 'Syne', sans-serif;
+    }
+    body { background: var(--bg); color: var(--text); font-family: var(--font-sans); min-height: 100vh; }
+    input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.4); }
+    input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    ::-webkit-scrollbar { width: 3px; height: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
+    .tab-btn { background: none; border: none; cursor: pointer; font-family: var(--font-sans); font-weight: 700; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; padding: 10px 18px; color: var(--muted); border-bottom: 2px solid transparent; transition: all 0.2s; }
+    .tab-btn.active { color: var(--orange); border-bottom-color: var(--orange); }
+    .pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 99px; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; font-family: var(--font-mono); }
+    .btn-primary { background: var(--orange); border: none; border-radius: 8px; color: #fff; font-weight: 700; padding: 9px 16px; cursor: pointer; font-family: var(--font-sans); font-size: 12px; letter-spacing: 0.05em; transition: opacity 0.2s; }
+    .btn-primary:hover { opacity: 0.85; }
+    .btn-ghost { background: none; border: 1px solid var(--border2); border-radius: 8px; color: var(--muted); padding: 8px 14px; cursor: pointer; font-family: var(--font-sans); font-size: 12px; transition: border-color 0.2s; }
+    .btn-ghost:hover { border-color: var(--muted); }
+    .input { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 8px 12px; font-size: 13px; font-family: var(--font-mono); outline: none; width: 100%; transition: border-color 0.2s; }
+    .input:focus { border-color: var(--orange); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.3s ease; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useMemo, useCallback } = React;
+
+    // ── Constants ──────────────────────────────────────────────────────────────
+    const BMR = 1734;
+    const WATCH_ADJUST = 0.80;
+    const PROTEIN_FLOOR = 160;
+
+    // Day type by day-of-week (0=Sun,1=Mon,...,6=Sat)
+    const DAY_TYPE_MAP = { 0: 'rest', 1: 'training', 2: 'training', 3: 'endurance', 4: 'training', 5: 'training', 6: 'hiit' };
+    const DAY_TYPE_LABEL = { training: 'Training', hiit: 'HIIT', endurance: 'Zone 2', rest: 'Rest' };
+    const DAY_TYPE_COLOR = { training: 'var(--orange)', hiit: 'var(--red)', endurance: 'var(--cyan)', rest: 'var(--green)' };
+
+    // Calorie targets by day type
+    const CAL_TARGETS = {
+      training:  { min: 2000, max: 2100, target: 2050 },
+      hiit:      { min: 1950, max: 2050, target: 2000 },
+      endurance: { min: 1850, max: 1950, target: 1900 },
+      rest:      { min: 1700, max: 1800, target: 1750 },
+    };
+
+    const MACROS = { protein: 160, carbs: 175, fat: 60, fiber: 30 };
+    const MACRO_COLORS = { protein: 'var(--cyan)', carbs: 'var(--purple)', fat: 'var(--red)', fiber: 'var(--green)' };
+    const STORAGE_KEY = 'fitness-tracker-v2';
+
+    const todayISO = () => new Date().toISOString().slice(0, 10);
+
+    const getDayType = (iso) => {
+      const [y, m, d] = iso.split('-').map(Number);
+      return DAY_TYPE_MAP[new Date(y, m - 1, d).getDay()];
+    };
+
+    const fmtDate = (iso) => {
+      const [y, m, d] = iso.split('-').map(Number);
+      const date = new Date(y, m - 1, d);
+      const today = new Date(); today.setHours(0,0,0,0);
+      const diff = Math.round((date - today) / 86400000);
+      if (diff === 0) return 'Today';
+      if (diff === -1) return 'Yesterday';
+      return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    };
+
+    const fmtShort = (iso) => {
+      const [y, m, d] = iso.split('-').map(Number);
+      return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' });
+    };
+
+    const SEED_DATA = {
+      '2026-03-21': {
+        iso: '2026-03-21', activeCal: '650',
+        meals: [
+          { id: 1, name: 'Breakfast', foods: [
+            { id: 101, name: 'Premier Protein Shake + Creatine', calories: 160, protein: 30, carbs: 5, fat: 3, fiber: 1 },
+            { id: 102, name: 'Premier Protein', calories: 160, protein: 30, carbs: 5, fat: 3, fiber: 1 },
+          ]},
+          { id: 2, name: 'Lunch', foods: [
+            { id: 201, name: 'Costco Chicken Dilla', calories: 300, protein: 31, carbs: 28, fat: 15.5, fiber: 22 },
+          ]},
+          { id: 3, name: 'Snack', foods: [] },
+          { id: 4, name: 'Dinner', foods: [
+            { id: 401, name: 'Filet', calories: 500, protein: 60, carbs: 0, fat: 28, fiber: 0 },
+          ]},
+          { id: 5, name: 'Drinks', foods: [
+            { id: 501, name: 'Drinks', calories: 800, protein: 0, carbs: 0, fat: 0, fiber: 0 },
+          ]},
+        ],
+      },
+      '2026-03-22': {
+        iso: '2026-03-22', activeCal: '396',
+        meals: [
+          { id: 1, name: 'Morning Food', foods: [
+            { id: 101, name: 'Boars Head - 3 oz', calories: 100, protein: 21, carbs: 0, fat: 1.6, fiber: 0 },
+            { id: 102, name: 'Premier Protein', calories: 160, protein: 30, carbs: 3, fat: 3, fiber: 0 },
+          ]},
+          { id: 2, name: 'Lunch and Snacks', foods: [
+            { id: 201, name: 'Costco Chicken Quesadilla', calories: 300, protein: 31, carbs: 28, fat: 15.5, fiber: 22 },
+            { id: 202, name: 'Oikos', calories: 90, protein: 15, carbs: 10, fat: 0, fiber: 0 },
+          ]},
+          { id: 3, name: 'Dinner', foods: [
+            { id: 301, name: 'Chipotle Homemade', calories: 445, protein: 37, carbs: 59, fat: 6.5, fiber: 0 },
+            { id: 302, name: 'Prem Prot 2', calories: 160, protein: 30, carbs: 5, fat: 3, fiber: 2 },
+            { id: 303, name: 'Rice Cake', calories: 190, protein: 5, carbs: 12, fat: 0, fiber: 0 },
+          ]},
+        ],
+      },
+      '2026-03-23': {
+        iso: '2026-03-23', activeCal: '573',
+        meals: [
+          { id: 1, name: 'Breakfast', foods: [
+            { id: 101, name: 'Premier Protein', calories: 160, protein: 30, carbs: 5, fat: 3, fiber: 2 },
+          ]},
+          { id: 2, name: 'Lunch', foods: [
+            { id: 201, name: 'Imp Chicken', calories: 225, protein: 38, carbs: 25, fat: 4, fiber: 22.5 },
+            { id: 202, name: 'Built Bar', calories: 140, protein: 17, carbs: 13, fat: 3, fiber: 0 },
+            { id: 203, name: 'Boars Head', calories: 90, protein: 16.5, carbs: 1.5, fat: 2.25, fiber: 0 },
+            { id: 204, name: 'Banana', calories: 105, protein: 1.3, carbs: 27, fat: 0.4, fiber: 3 },
+          ]},
+          { id: 3, name: 'Dinner', foods: [
+            { id: 301, name: 'Rice and Turkey', calories: 510, protein: 44, carbs: 54, fat: 13.5, fiber: 0 },
+            { id: 302, name: 'Rice Cake', calories: 190, protein: 5, carbs: 2, fat: 0, fiber: 0 },
+          ]},
+        ],
+      },
+      '2026-03-24': {
+        iso: '2026-03-24', activeCal: '610',
+        meals: [
+          { id: 1, name: 'Breakfast', foods: [
+            { id: 101, name: 'Premier Protein', calories: 160, protein: 30, carbs: 5, fat: 3, fiber: 0 },
+          ]},
+          { id: 2, name: 'Lunch', foods: [
+            { id: 201, name: 'Impeccable Chicken Sandwich', calories: 225, protein: 38, carbs: 25, fat: 4, fiber: 22.5 },
+            { id: 202, name: 'Oikos Yogurt', calories: 90, protein: 15, carbs: 7, fat: 0, fiber: 0 },
+            { id: 203, name: 'Oikos Complete', calories: 130, protein: 20, carbs: 6, fat: 3, fiber: 0 },
+          ]},
+          { id: 3, name: 'Dinner', foods: [
+            { id: 301, name: "Chicken Potato's Veggies", calories: 396, protein: 61, carbs: 38, fat: 2.4, fiber: 5.6 },
+            { id: 302, name: 'Rice Cake PB Banana', calories: 335, protein: 6, carbs: 49, fat: 15.5, fiber: 0 },
+            { id: 303, name: 'Skyr and Granola', calories: 270, protein: 23, carbs: 24, fat: 13, fiber: 0 },
+          ]},
+        ],
+      },
+      '2026-03-25': {
+        iso: '2026-03-25', activeCal: '',
+        meals: [
+          { id: 1, name: 'Premier Protein', foods: [
+            { id: 101, name: 'Premier Protein', calories: 160, protein: 30, carbs: 5, fat: 3, fiber: 0 },
+          ]},
+          { id: 2, name: 'Lunch', foods: [
+            { id: 201, name: 'Chicken Sandwich', calories: 225, protein: 38, carbs: 25, fat: 4, fiber: 22.5 },
+            { id: 202, name: 'Oikos', calories: 90, protein: 15, carbs: 7, fat: 0, fiber: 0 },
+            { id: 203, name: 'Chomps', calories: 100, protein: 10, carbs: 0, fat: 7, fiber: 0 },
+          ]},
+          { id: 3, name: 'Home / Dinner', foods: [
+            { id: 301, name: 'Premier Protein 2', calories: 160, protein: 30, carbs: 5, fat: 2, fiber: 2 },
+            { id: 302, name: 'Fruit Rasp Grapes', calories: 50, protein: 1, carbs: 12, fat: 0, fiber: 5 },
+            { id: 303, name: 'Pasta', calories: 617, protein: 57, carbs: 49, fat: 24, fiber: 8.5 },
+            { id: 304, name: 'Macadamia Nuts', calories: 200, protein: 2, carbs: 4, fat: 22, fiber: 2 },
+          ]},
+        ],
+      },
+    };
+
+    const loadData = () => {
+      try {
+        const s = localStorage.getItem(STORAGE_KEY);
+        if (s) {
+          const parsed = JSON.parse(s);
+          // Merge seed data for days not yet in storage
+          return { ...SEED_DATA, ...parsed };
+        }
+      } catch(e) {}
+      return { ...SEED_DATA };
+    };
+
+    const saveData = (data) => {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch(e) {}
+    };
+
+    const emptyDay = (iso) => ({
+      iso,
+      activeCal: '',
+      meals: [
+        { id: 1, name: 'Breakfast', foods: [{ id: 101, name: 'Premier Protein Shake', calories: 160, protein: 30, carbs: 5, fat: 3, fiber: 1 }] },
+        { id: 2, name: 'Lunch', foods: [] },
+        { id: 3, name: 'Home / Dinner', foods: [] },
+        { id: 4, name: 'Snacks', foods: [] },
+      ],
+    });
+
+    // ── Micro components ───────────────────────────────────────────────────────
+    function Bar({ value, goal, min, max, color }) {
+      const pct = Math.min((value / (max || goal)) * 100, 100);
+      const over = value > (max || goal);
+      return (
+        <div style={{ position: 'relative', height: 5, background: 'var(--surface2)', borderRadius: 99, overflow: 'hidden' }}>
+          {min != null && <div style={{ position: 'absolute', left: `${(min/(max||goal))*100}%`, top: 0, width: 2, height: '100%', background: '#ffffff18', zIndex: 1 }} />}
+          <div style={{ height: '100%', width: `${pct}%`, background: over ? 'var(--red)' : color, borderRadius: 99, transition: 'width 0.4s ease' }} />
+        </div>
+      );
+    }
+
+    function DeficitBadge({ real, target }) {
+      if (real == null || isNaN(real)) return null;
+      const diff = real - target;
+      if (Math.abs(diff) <= 100) return <span className="pill" style={{ background: '#00e5a022', color: 'var(--green)' }}>✓ On Track</span>;
+      if (real > target + 100) return <span className="pill" style={{ background: '#ff446622', color: 'var(--red)' }}>⚠ Too High +{Math.round(diff)}</span>;
+      return <span className="pill" style={{ background: '#ffd16622', color: 'var(--yellow)' }}>↓ Under {Math.round(Math.abs(diff))}</span>;
+    }
+
+    // ── Daily View ─────────────────────────────────────────────────────────────
+    function DailyView({ dayData, onUpdate }) {
+      const [addingTo, setAddingTo] = useState(null);
+      const [newFood, setNewFood] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '', fiber: '' });
+      const [editingFood, setEditingFood] = useState(null);
+      const [addingMeal, setAddingMeal] = useState(false);
+      const [newMealName, setNewMealName] = useState('');
+
+      const dayType = getDayType(dayData.iso);
+      const targets = CAL_TARGETS[dayType];
+      const adjActive = dayData.activeCal ? Math.round(Number(dayData.activeCal) * WATCH_ADJUST) : null;
+      const tdee = adjActive != null ? BMR + adjActive : null;
+      const targetDeficit = 250;
+
+      const totals = useMemo(() => {
+        return dayData.meals.reduce((acc, meal) => {
+          meal.foods.forEach(f => {
+            acc.calories += Number(f.calories) || 0;
+            acc.protein  += Number(f.protein)  || 0;
+            acc.carbs    += Number(f.carbs)    || 0;
+            acc.fat      += Number(f.fat)      || 0;
+            acc.fiber    += Number(f.fiber)    || 0;
+          });
+          return acc;
+        }, { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+      }, [dayData.meals]);
+
+      const realDeficit = tdee != null ? Math.round(tdee - totals.calories) : null;
+      const calTarget = tdee != null ? tdee - targetDeficit : targets.target;
+      const calMin = tdee != null ? calTarget - 100 : targets.min;
+      const calMax = tdee != null ? calTarget + 100 : targets.max;
+      const calInRange = totals.calories >= calMin && totals.calories <= calMax;
+      const calOver = totals.calories > calMax;
+      const calColor = calOver ? 'var(--red)' : calInRange ? 'var(--green)' : 'var(--orange)';
+
+      const updateMeals = (fn) => onUpdate({ ...dayData, meals: fn(dayData.meals) });
+      const updateActiveCal = (v) => onUpdate({ ...dayData, activeCal: v });
+
+      const updateFood = (mealId, foodId, field, val) =>
+        updateMeals(prev => prev.map(m => m.id === mealId
+          ? { ...m, foods: m.foods.map(f => f.id === foodId ? { ...f, [field]: val } : f) } : m));
+
+      const deleteFood = (mealId, foodId) =>
+        updateMeals(prev => prev.map(m => m.id === mealId
+          ? { ...m, foods: m.foods.filter(f => f.id !== foodId) } : m));
+
+      const addFood = (mealId) => {
+        if (!newFood.name) return;
+        updateMeals(prev => prev.map(m => m.id === mealId
+          ? { ...m, foods: [...m.foods, { id: Date.now(), ...newFood }] } : m));
+        setNewFood({ name: '', calories: '', protein: '', carbs: '', fat: '', fiber: '' });
+        setAddingTo(null);
+      };
+
+      const addMeal = () => {
+        if (!newMealName.trim()) return;
+        updateMeals(prev => [...prev, { id: Date.now(), name: newMealName.trim(), foods: [] }]);
+        setNewMealName(''); setAddingMeal(false);
+      };
+
+      const typeColor = DAY_TYPE_COLOR[dayType];
+
+      return (
+        <div className="fade-in" style={{ paddingBottom: 40 }}>
+
+          {/* Day type badge + Apple Watch input */}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>
+            <span className="pill" style={{ background: typeColor + '22', color: typeColor, fontSize: 11 }}>
+              {DAY_TYPE_LABEL[dayType]} Day
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '6px 12px', flex: 1, minWidth: 200 }}>
+              <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>⌚ Active Cal</span>
+              <input className="input" type="number" placeholder="e.g. 500"
+                value={dayData.activeCal}
+                onChange={e => updateActiveCal(e.target.value)}
+                style={{ border: 'none', background: 'none', padding: '0 4px', fontSize: 14, fontWeight: 700, flex: 1, minWidth: 60 }} />
+              {adjActive != null && <span style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>→ {adjActive} adj.</span>}
+            </div>
+          </div>
+
+          {/* TDEE strip */}
+          {tdee != null && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 18 }}>
+              {[
+                { label: 'Est. TDEE', value: tdee, color: 'var(--text)' },
+                { label: 'Cal Target', value: calTarget, color: 'var(--orange)' },
+                { label: 'Real Deficit', value: realDeficit, color: realDeficit > 400 ? 'var(--red)' : realDeficit < 100 ? 'var(--yellow)' : 'var(--green)' },
+              ].map(({ label, value, color }) => (
+                <div key={label} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '10px 12px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>{label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color, fontFamily: 'var(--font-mono)' }}>{value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Calorie summary card */}
+          <div className="card" style={{ marginBottom: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 10, color: 'var(--muted)', letterSpacing: '0.15em', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Calories In</div>
+                <div style={{ fontSize: 46, fontWeight: 800, color: calColor, fontFamily: 'var(--font-mono)', lineHeight: 1 }}>{Math.round(totals.calories)}</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3, fontFamily: 'var(--font-mono)' }}>target {calMin}–{calMax}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <DeficitBadge real={realDeficit} target={targetDeficit} />
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6, fontFamily: 'var(--font-mono)' }}>
+                  {calInRange ? '✓ In range' : calOver ? `+${Math.round(totals.calories - calMax)} over` : `${Math.round(calMin - totals.calories)} to go`}
+                </div>
+              </div>
+            </div>
+            <Bar value={totals.calories} goal={calMax} min={calMin} max={calMax} color="var(--orange)" />
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginTop: 18 }}>
+              {['protein','carbs','fat','fiber'].map(k => (
+                <div key={k} style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: MACRO_COLORS[k], fontFamily: 'var(--font-mono)' }}>
+                    {totals[k] % 1 === 0 ? totals[k] : totals[k].toFixed(1)}<span style={{ fontSize: 9, color: 'var(--muted)' }}>g</span>
+                  </div>
+                  <div style={{ fontSize: 9, color: 'var(--muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{k}</div>
+                  <Bar value={totals[k]} goal={MACROS[k]} color={MACRO_COLORS[k]} />
+                  <div style={{ fontSize: 9, color: 'var(--muted2)', marginTop: 2, fontFamily: 'var(--font-mono)' }}>/{MACROS[k]}g</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Meals */}
+          {dayData.meals.map(meal => (
+            <div key={meal.id} style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.12em' }}>{meal.name}</span>
+                <button onClick={() => setAddingTo(meal.id)} style={{ fontSize: 11, color: 'var(--orange)', background: 'none', border: '1px solid var(--orange-dim)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}>+ add</button>
+              </div>
+
+              {meal.foods.length === 0 && <div style={{ fontSize: 11, color: 'var(--muted2)', padding: '8px 0', fontStyle: 'italic' }}>Empty</div>}
+
+              {meal.foods.map(food => (
+                <div key={food.id} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '11px 14px', marginBottom: 7 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{food.name}</span>
+                    <button onClick={() => deleteFood(meal.id, food.id)} style={{ background: 'none', border: 'none', color: 'var(--muted2)', cursor: 'pointer', fontSize: 13 }}>✕</button>
+                  </div>
+                  {editingFood?.mealId === meal.id && editingFood?.foodId === food.id ? (
+                    <div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 5, marginBottom: 8 }}>
+                        {['calories','protein','carbs','fat','fiber'].map(field => (
+                          <div key={field}>
+                            <div style={{ fontSize: 8, color: 'var(--muted)', marginBottom: 2, textTransform: 'uppercase' }}>{field}</div>
+                            <input type="number" value={food[field]} onChange={e => updateFood(meal.id, food.id, field, e.target.value)} className="input" style={{ padding: '5px 6px', fontSize: 12 }} />
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={() => setEditingFood(null)} className="btn-ghost" style={{ width: '100%', fontSize: 11 }}>Done</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {[{k:'calories',u:'cal'},{k:'protein',u:'g'},{k:'carbs',u:'g'},{k:'fat',u:'g'},{k:'fiber',u:'g'}].map(({k,u}) => (
+                        <div key={k} style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: k==='calories'?'var(--orange)':MACRO_COLORS[k], fontFamily: 'var(--font-mono)' }}>{food[k]}<span style={{ fontSize: 8, color: 'var(--muted)' }}>{u}</span></div>
+                          <div style={{ fontSize: 8, color: 'var(--muted)', textTransform: 'uppercase' }}>{k==='calories'?'kcal':k}</div>
+                        </div>
+                      ))}
+                      <button onClick={() => setEditingFood({mealId:meal.id,foodId:food.id})} className="btn-ghost" style={{ marginLeft: 'auto', fontSize: 10, padding: '3px 8px' }}>edit</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {addingTo === meal.id && (
+                <div style={{ background: 'var(--surface2)', border: '1px dashed var(--border2)', borderRadius: 12, padding: 14, marginTop: 4 }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 9, color: 'var(--muted)', marginBottom: 4, textTransform: 'uppercase' }}>Food Name</div>
+                    <input autoFocus placeholder="e.g. 4 scrambled eggs" value={newFood.name}
+                      onChange={e => setNewFood({...newFood, name: e.target.value})}
+                      className="input" style={{ fontSize: 13 }} />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 5, marginBottom: 10 }}>
+                    {['calories','protein','carbs','fat','fiber'].map(field => (
+                      <div key={field}>
+                        <div style={{ fontSize: 8, color: 'var(--muted)', marginBottom: 2, textTransform: 'uppercase' }}>{field}</div>
+                        <input type="number" placeholder="0" value={newFood[field]}
+                          onChange={e => setNewFood({...newFood, [field]: e.target.value})} className="input" style={{ padding: '5px 6px' }} />
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => addFood(meal.id)} className="btn-primary" style={{ flex: 1 }}>Add Food</button>
+                    <button onClick={() => { setAddingTo(null); setNewFood({name:'',calories:'',protein:'',carbs:'',fat:'',fiber:''}); }} className="btn-ghost">Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {addingMeal ? (
+            <div style={{ background: 'var(--surface2)', border: '1px dashed var(--border2)', borderRadius: 12, padding: 14 }}>
+              <input autoFocus placeholder="Meal name" value={newMealName}
+                onChange={e => setNewMealName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addMeal()}
+                className="input" style={{ marginBottom: 10, fontSize: 13 }} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={addMeal} className="btn-primary" style={{ flex: 1 }}>Add Meal</button>
+                <button onClick={() => { setAddingMeal(false); setNewMealName(''); }} className="btn-ghost">Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setAddingMeal(true)} style={{ width: '100%', background: 'none', border: '1px dashed var(--border)', borderRadius: 12, color: 'var(--muted2)', padding: 12, cursor: 'pointer', fontSize: 12, marginTop: 4 }}>+ Add Meal</button>
+          )}
+        </div>
+      );
+    }
+
+    // ── Weekly View ─────────────────────────────────────────────────────────────
+    // Programme runs Mar 20 – May 10 2026, split into fixed Mon-Sun weeks
+    const PROGRAMME_WEEKS = [
+      { label: 'Week 1', start: '2026-03-20', end: '2026-03-26' },
+      { label: 'Week 2', start: '2026-03-27', end: '2026-04-02' },
+      { label: 'Week 3', start: '2026-04-03', end: '2026-04-09' },
+      { label: 'Week 4', start: '2026-04-10', end: '2026-04-16' },
+      { label: 'Week 5', start: '2026-04-17', end: '2026-04-23' },
+      { label: 'Week 6', start: '2026-04-24', end: '2026-04-30' },
+      { label: 'Week 7', start: '2026-05-01', end: '2026-05-07' },
+      { label: 'Week 8', start: '2026-05-08', end: '2026-05-10' },
+    ];
+
+    const isoRange = (start, end) => {
+      const days = []; let cur = new Date(start + 'T00:00:00');
+      const last = new Date(end + 'T00:00:00');
+      while (cur <= last) { days.push(cur.toISOString().slice(0,10)); cur.setDate(cur.getDate()+1); }
+      return days;
+    };
+
+    const getDayStats = (iso, allDays) => {
+      const day = allDays[iso];
+      if (!day) return { iso, dayType: getDayType(iso), tdee: null, calsIn: 0, protein: 0, realDeficit: null, calTarget: CAL_TARGETS[getDayType(iso)].target };
+      const dayType = getDayType(iso);
+      const targets = CAL_TARGETS[dayType];
+      const adjActive = day.activeCal ? Math.round(Number(day.activeCal) * WATCH_ADJUST) : null;
+      const tdee = adjActive != null ? BMR + adjActive : null;
+      const calsIn = day.meals.reduce((a,m) => a + m.foods.reduce((b,f) => b+(Number(f.calories)||0),0),0);
+      const protein = day.meals.reduce((a,m) => a + m.foods.reduce((b,f) => b+(Number(f.protein)||0),0),0);
+      const realDeficit = tdee != null ? Math.round(tdee - calsIn) : null;
+      const calTarget = tdee != null ? tdee - 250 : targets.target;
+      return { iso, dayType, tdee, calsIn, protein, realDeficit, calTarget };
+    };
+
+    function WeeklyView({ allDays }) {
+      const today = todayISO();
+      // Find current week index
+      const currentWeekIdx = PROGRAMME_WEEKS.findIndex(w => today >= w.start && today <= w.end);
+      const [activeWeek, setActiveWeek] = useState(currentWeekIdx >= 0 ? currentWeekIdx : 0);
+
+      const week = PROGRAMME_WEEKS[activeWeek];
+      const days = isoRange(week.start, week.end).map(iso => getDayStats(iso, allDays));
+
+      const loggedDays = days.filter(d => d.calsIn > 0);
+      const weekCals = days.reduce((a,d) => a + d.calsIn, 0);
+      const weekDeficit = days.filter(d => d.realDeficit != null).reduce((a,d) => a + d.realDeficit, 0);
+      const avgProtein = loggedDays.length ? Math.round(days.reduce((a,d) => a + d.protein,0) / Math.max(loggedDays.length,1)) : 0;
+      const isFuture = week.start > today;
+      const isPartial = week.end > today && week.start <= today;
+
+      return (
+        <div className="fade-in" style={{ paddingBottom: 40 }}>
+
+          {/* Week selector */}
+          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4, marginBottom: 18 }}>
+            {PROGRAMME_WEEKS.map((w, i) => {
+              const isPast = w.end < today;
+              const isCurrent = i === currentWeekIdx;
+              const isActive = i === activeWeek;
+              return (
+                <button key={i} onClick={() => setActiveWeek(i)} style={{
+                  flexShrink: 0, padding: '6px 12px', borderRadius: 20, fontSize: 10, fontWeight: 700,
+                  cursor: 'pointer', fontFamily: 'var(--font-mono)', border: '1px solid',
+                  background: isActive ? 'var(--orange)' : 'transparent',
+                  borderColor: isActive ? 'var(--orange)' : isCurrent ? 'var(--orange)' : 'var(--border2)',
+                  color: isActive ? '#fff' : isCurrent ? 'var(--orange)' : isPast ? 'var(--muted)' : 'var(--muted2)',
+                  opacity: isFuture && !isActive ? 0.5 : 1,
+                }}>{w.label}</button>
+              );
+            })}
+          </div>
+
+          {/* Week header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800 }}>{week.label}</div>
+              <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                {new Date(week.start+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})} – {new Date(week.end+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}
+                {isPartial && <span style={{ color: 'var(--yellow)', marginLeft: 8 }}>· In Progress</span>}
+                {isFuture && <span style={{ color: 'var(--muted2)', marginLeft: 8 }}>· Upcoming</span>}
+              </div>
+            </div>
+            {loggedDays.length > 0 && <span className="pill" style={{ background: 'var(--orange-dim)', color: 'var(--orange)' }}>{loggedDays.length}/{days.length} logged</span>}
+          </div>
+
+          {/* Week summary strip */}
+          {!isFuture && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 18 }}>
+              {[
+                { label: 'Total Eaten', value: weekCals > 0 ? weekCals.toLocaleString() : '—', color: 'var(--orange)' },
+                { label: 'Total Deficit', value: weekDeficit > 0 ? weekDeficit.toLocaleString() : '—', color: weekDeficit > 1750 ? 'var(--red)' : weekDeficit > 0 ? 'var(--green)' : 'var(--muted)' },
+                { label: 'Avg Protein', value: avgProtein > 0 ? avgProtein + 'g' : '—', color: avgProtein >= PROTEIN_FLOOR ? 'var(--cyan)' : avgProtein > 0 ? 'var(--red)' : 'var(--muted)' },
+              ].map(({ label, value, color }) => (
+                <div key={label} className="card" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>{label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color, fontFamily: 'var(--font-mono)' }}>{value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Day rows */}
+          {days.map(({ iso, dayType, tdee, calsIn, protein, realDeficit, calTarget }) => {
+            const typeColor = DAY_TYPE_COLOR[dayType];
+            const isToday = iso === today;
+            const isFutureDay = iso > today;
+            return (
+              <div key={iso} className="card" style={{ marginBottom: 8, opacity: isFutureDay ? 0.4 : 1, border: isToday ? '1px solid var(--orange)' : '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: calsIn > 0 ? 8 : 0 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>{fmtShort(iso)}</span>
+                    {isToday && <span className="pill" style={{ background: 'var(--orange-dim)', color: 'var(--orange)', fontSize: 8 }}>Today</span>}
+                    <span className="pill" style={{ background: typeColor+'22', color: typeColor, fontSize: 8 }}>{DAY_TYPE_LABEL[dayType]}</span>
+                  </div>
+                  {!isFutureDay && <DeficitBadge real={realDeficit} target={250} />}
+                </div>
+                {calsIn > 0 && (
+                  <>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginBottom: 8 }}>
+                      {[
+                        { label: 'Eaten', value: Math.round(calsIn), color: 'var(--orange)' },
+                        { label: 'TDEE', value: tdee || '—', color: 'var(--text)' },
+                        { label: 'Deficit', value: realDeficit != null ? realDeficit : '—', color: realDeficit > 400 ? 'var(--red)' : realDeficit > 0 ? 'var(--green)' : 'var(--muted)' },
+                        { label: 'Protein', value: Math.round(protein) + 'g', color: protein >= PROTEIN_FLOOR ? 'var(--cyan)' : 'var(--red)' },
+                      ].map(({ label, value, color }) => (
+                        <div key={label} style={{ textAlign: 'center', background: 'var(--surface2)', borderRadius: 8, padding: '7px 4px' }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color, fontFamily: 'var(--font-mono)' }}>{value}</div>
+                          <div style={{ fontSize: 8, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>{label}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <Bar value={calsIn} goal={calTarget+100} min={calTarget-100} max={calTarget+100} color="var(--orange)" />
+                  </>
+                )}
+                {!isFutureDay && calsIn === 0 && (
+                  <div style={{ fontSize: 10, color: 'var(--muted2)', fontStyle: 'italic', marginTop: 4 }}>No data logged</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ── Main App ───────────────────────────────────────────────────────────────
+    function App() {
+      const [allDays, setAllDays] = useState(loadData);
+      const [activeDay, setActiveDay] = useState(todayISO());
+      const [tab, setTab] = useState('daily');
+      const [showDayPicker, setShowDayPicker] = useState(false);
+      const [newDayInput, setNewDayInput] = useState('');
+
+      const ensureDay = (iso) => {
+        if (!allDays[iso]) {
+          const next = { ...allDays, [iso]: emptyDay(iso) };
+          setAllDays(next); saveData(next);
+        }
+        return allDays[iso] || emptyDay(iso);
+      };
+
+      const dayData = allDays[activeDay] || emptyDay(activeDay);
+
+      const handleUpdate = useCallback((updated) => {
+        setAllDays(prev => {
+          const next = { ...prev, [activeDay]: updated };
+          saveData(next);
+          return next;
+        });
+      }, [activeDay]);
+
+      const addDay = () => {
+        const d = newDayInput || todayISO();
+        ensureDay(d);
+        setActiveDay(d); setShowDayPicker(false); setNewDayInput('');
+      };
+
+      const sortedDays = Object.keys(allDays).sort().reverse();
+      if (!allDays[todayISO()]) {
+        const next = { ...allDays, [todayISO()]: emptyDay(todayISO()) };
+        setAllDays(next); saveData(next);
+      }
+
+      return (
+        <div style={{ minHeight: '100vh', background: 'var(--bg)', padding: '0 0 24px', maxWidth: 520, margin: '0 auto' }}>
+
+          {/* Header */}
+          <div style={{ padding: '24px 16px 0', marginBottom: 4 }}>
+            <div style={{ fontSize: 10, letterSpacing: '0.25em', color: 'var(--orange)', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>Mar 20 – May 10, 2026</div>
+            <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.02em' }}>Fitness Tracker</div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', paddingLeft: 8, marginBottom: 16 }}>
+            <button className={`tab-btn${tab==='daily'?' active':''}`} onClick={() => setTab('daily')}>Daily Log</button>
+            <button className={`tab-btn${tab==='weekly'?' active':''}`} onClick={() => setTab('weekly')}>Weekly</button>
+          </div>
+
+          <div style={{ padding: '0 16px' }}>
+            {/* Day selector */}
+            {tab === 'daily' && (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 18, overflowX: 'auto', paddingBottom: 4 }}>
+                {sortedDays.map(d => (
+                  <button key={d} onClick={() => setActiveDay(d)} style={{
+                    flexShrink: 0, padding: '6px 14px', borderRadius: 20, fontSize: 11, fontWeight: 700,
+                    cursor: 'pointer', fontFamily: 'var(--font-mono)', border: '1px solid',
+                    background: activeDay === d ? 'var(--orange)' : 'transparent',
+                    borderColor: activeDay === d ? 'var(--orange)' : 'var(--border2)',
+                    color: activeDay === d ? '#fff' : 'var(--muted)',
+                    transition: 'all 0.2s',
+                  }}>{fmtDate(d)}</button>
+                ))}
+                {showDayPicker ? (
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+                    <input type="date" value={newDayInput} onChange={e => setNewDayInput(e.target.value)}
+                      className="input" style={{ width: 130, padding: '5px 8px' }} />
+                    <button onClick={addDay} className="btn-primary" style={{ padding: '5px 12px', whiteSpace: 'nowrap' }}>Add</button>
+                    <button onClick={() => setShowDayPicker(false)} className="btn-ghost" style={{ padding: '5px 10px' }}>✕</button>
+                  </div>
+                ) : (
+                  <button onClick={() => setShowDayPicker(true)} style={{ flexShrink: 0, padding: '6px 14px', borderRadius: 20, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px dashed var(--border2)', color: 'var(--muted2)', fontFamily: 'var(--font-mono)' }}>+ Day</button>
+                )}
+              </div>
+            )}
+
+            {tab === 'daily' && <DailyView dayData={dayData} onUpdate={handleUpdate} />}
+            {tab === 'weekly' && <WeeklyView allDays={allDays} />}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
