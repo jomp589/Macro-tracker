@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Macro Tracker</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0a14; }
+    input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.5); }
+    ::-webkit-scrollbar { height: 4px; } 
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 99px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState } = React;
+
+    const GOALS = { calories: 1600, calMin: 1500, calMax: 1600, protein: 150, carbs: 150, fat: 55, fiber: 30 };
+    const EMPTY_FOOD = { name: "", calories: "", protein: "", carbs: "", fat: "", fiber: "" };
+    const COLORS = { calories: "#f97316", protein: "#22d3ee", carbs: "#a78bfa", fat: "#fb7185", fiber: "#4ade80" };
+
+    const fmtDate = (iso) => {
+      const [y, m, d] = iso.split("-").map(Number);
+      const date = new Date(y, m - 1, d);
+      const today = new Date(); today.setHours(0,0,0,0);
+      const diff = Math.round((date - today) / 86400000);
+      if (diff === 0) return "Today";
+      if (diff === -1) return "Yesterday";
+      return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    };
+
+    const todayISO = () => new Date().toISOString().slice(0, 10);
+
+    const STORAGE_KEY = "macro-tracker-data";
+
+    const loadData = () => {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) return JSON.parse(saved);
+      } catch(e) {}
+      return {
+        [todayISO()]: [
+          { id: 1, name: "Breakfast", foods: [{ id: 101, name: "Premier Protein Shake + Creatine", calories: 160, protein: 30, carbs: 5, fat: 3, fiber: 1 }] },
+          { id: 2, name: "Lunch", foods: [{ id: 201, name: "Lunch (tap to rename)", calories: 300, protein: 31, carbs: 28, fat: 15.5, fiber: 22 }] },
+        ],
+      };
+    };
+
+    function Bar({ value, goal, min, max, color }) {
+      const pct = Math.min((value / goal) * 100, 100);
+      const over = value > (max ?? goal);
+      return (
+        <div style={{ position: "relative", height: 6, background: "#1e1e2e", borderRadius: 99, overflow: "visible" }}>
+          {min !== undefined && (
+            <>
+              <div style={{ position: "absolute", left: `${(min/goal)*100}%`, top: -2, width: 2, height: 10, background: "#ffffff22", borderRadius: 1, zIndex: 1 }} />
+              <div style={{ position: "absolute", left: `${Math.min((max/goal)*100,100)}%`, top: -2, width: 2, height: 10, background: "#ffffff22", borderRadius: 1, zIndex: 1 }} />
+            </>
+          )}
+          <div style={{ height: "100%", width: `${pct}%`, background: over ? "#ef4444" : color, borderRadius: 99, transition: "width 0.5s ease" }} />
+        </div>
+      );
+    }
+
+    function MacroTracker() {
+      const [allDays, setAllDays] = useState(loadData);
+      const [activeDay, setActiveDay] = useState(todayISO());
+      const [editingFood, setEditingFood] = useState(null);
+      const [addingTo, setAddingTo] = useState(null);
+      const [newFood, setNewFood] = useState(EMPTY_FOOD);
+      const [addingMeal, setAddingMeal] = useState(false);
+      const [newMealName, setNewMealName] = useState("");
+      const [editingName, setEditingName] = useState(null);
+      const [showDayPicker, setShowDayPicker] = useState(false);
+      const [newDayInput, setNewDayInput] = useState("");
+
+      const meals = allDays[activeDay] || [];
+
+      const setMeals = (updater) => {
+        setAllDays((prev) => {
+          const next = { ...prev, [activeDay]: typeof updater === "function" ? updater(prev[activeDay] || []) : updater };
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch(e) {}
+          return next;
+        });
+      };
+
+      const totals = meals.reduce(
+        (acc, meal) => {
+          meal.foods.forEach((f) => {
+            acc.calories += Number(f.calories)||0;
+            acc.protein += Number(f.protein)||0;
+            acc.carbs += Number(f.carbs)||0;
+            acc.fat += Number(f.fat)||0;
+            acc.fiber += Number(f.fiber)||0;
+          });
+          return acc;
+        },
+        { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 }
+      );
+
+      const updateFood = (mealId, foodId, field, val) =>
+        setMeals((prev) => prev.map((m) => m.id === mealId ? { ...m, foods: m.foods.map((f) => f.id === foodId ? { ...f, [field]: val } : f) } : m));
+
+      const deleteFood = (mealId, foodId) =>
+        setMeals((prev) => prev.map((m) => m.id === mealId ? { ...m, foods: m.foods.filter((f) => f.id !== foodId) } : m));
+
+      const addFood = (mealId) => {
+        if (!newFood.name) return;
+        setMeals((prev) => prev.map((m) => m.id === mealId ? { ...m, foods: [...m.foods, { id: Date.now(), ...newFood }] } : m));
+        setNewFood(EMPTY_FOOD); setAddingTo(null);
+      };
+
+      const addMeal = () => {
+        if (!newMealName.trim()) return;
+        setMeals((prev) => [...prev, { id: Date.now(), name: newMealName.trim(), foods: [] }]);
+        setNewMealName(""); setAddingMeal(false);
+      };
+
+      const addDay = () => {
+        const d = newDayInput || todayISO();
+        if (!allDays[d]) setAllDays((prev) => {
+          const next = { ...prev, [d]: [] };
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch(e) {}
+          return next;
+        });
+        setActiveDay(d); setShowDayPicker(false); setNewDayInput("");
+      };
+
+      const sortedDays = Object.keys(allDays).sort().reverse();
+
+      const inp = {
+        background: "#13131f", border: "1px solid #2a2a3e", borderRadius: 6,
+        color: "#e2e2f0", padding: "4px 8px", fontSize: 12,
+        fontFamily: "'DM Mono', monospace", outline: "none", width: "100%",
+      };
+
+      const calOver = totals.calories > GOALS.calMax;
+      const calInRange = totals.calories >= GOALS.calMin && totals.calories <= GOALS.calMax;
+      const calColor = calOver ? "#ef4444" : calInRange ? "#4ade80" : COLORS.calories;
+
+      return (
+        <div style={{ minHeight: "100vh", background: "#0a0a14", color: "#e2e2f0", fontFamily: "'DM Sans', sans-serif", padding: "24px 16px", maxWidth: 520, margin: "0 auto" }}>
+
+          {/* Header */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 11, letterSpacing: "0.2em", color: "#f97316", textTransform: "uppercase", fontFamily: "'DM Mono', monospace", marginBottom: 4 }}>Daily Log</div>
+            <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em" }}>Macro Tracker</div>
+          </div>
+
+          {/* Day Tabs */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 20, overflowX: "auto", paddingBottom: 4 }}>
+            {sortedDays.map((d) => (
+              <button key={d} onClick={() => setActiveDay(d)} style={{
+                flexShrink: 0, padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+                cursor: "pointer", fontFamily: "'DM Mono', monospace", border: "1px solid",
+                background: activeDay === d ? "#f97316" : "transparent",
+                borderColor: activeDay === d ? "#f97316" : "#2a2a3e",
+                color: activeDay === d ? "#fff" : "#555",
+              }}>{fmtDate(d)}</button>
+            ))}
+            {showDayPicker ? (
+              <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+                <input type="date" value={newDayInput} onChange={(e) => setNewDayInput(e.target.value)}
+                  style={{ ...inp, width: 130, padding: "5px 8px" }} />
+                <button onClick={addDay} style={{ background: "#f97316", border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, padding: "5px 12px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}>Add</button>
+                <button onClick={() => setShowDayPicker(false)} style={{ background: "none", border: "1px solid #2a2a3e", borderRadius: 8, color: "#555", padding: "5px 10px", cursor: "pointer", fontSize: 12 }}>✕</button>
+              </div>
+            ) : (
+              <button onClick={() => setShowDayPicker(true)} style={{ flexShrink: 0, padding: "6px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", background: "transparent", border: "1px dashed #2a2a3e", color: "#444", fontFamily: "'DM Mono', monospace" }}>+ Day</button>
+            )}
+          </div>
+
+          {/* Summary Card */}
+          <div style={{ background: "#11111e", border: "1px solid #1e1e32", borderRadius: 16, padding: 20, marginBottom: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 11, color: "#555", letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: "'DM Mono', monospace" }}>Calories</div>
+                <div style={{ fontSize: 42, fontWeight: 700, color: calColor, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>{Math.round(totals.calories)}</div>
+                <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>goal: {GOALS.calMin}–{GOALS.calMax}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 13, fontFamily: "'DM Mono', monospace", fontWeight: 700, color: calInRange ? "#4ade80" : calOver ? "#ef4444" : "#555" }}>
+                  {calInRange ? "✓ In range" : calOver ? `+${Math.round(totals.calories - GOALS.calMax)} over` : `${Math.round(GOALS.calMin - totals.calories)} to go`}
+                </div>
+              </div>
+            </div>
+            <Bar value={totals.calories} goal={GOALS.calMax} min={GOALS.calMin} max={GOALS.calMax} color={COLORS.calories} />
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 20 }}>
+              {["protein", "carbs", "fat", "fiber"].map((key) => (
+                <div key={key} style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: COLORS[key], fontFamily: "'DM Mono', monospace" }}>
+                    {totals[key] % 1 === 0 ? totals[key] : totals[key].toFixed(1)}<span style={{ fontSize: 10, color: "#555" }}>g</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: "#555", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.1em" }}>{key}</div>
+                  <Bar value={totals[key]} goal={GOALS[key]} color={COLORS[key]} />
+                  <div style={{ fontSize: 9, color: "#333", marginTop: 2, fontFamily: "'DM Mono', monospace" }}>/{GOALS[key]}g</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Meals */}
+          {meals.map((meal) => (
+            <div key={meal.id} style={{ marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#ccc", textTransform: "uppercase", letterSpacing: "0.1em" }}>{meal.name}</span>
+                <button onClick={() => setAddingTo(meal.id)} style={{ fontSize: 11, color: "#f97316", background: "none", border: "1px solid #2a1a0a", borderRadius: 6, padding: "3px 10px", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>+ add food</button>
+              </div>
+
+              {meal.foods.length === 0 && <div style={{ fontSize: 12, color: "#333", padding: "10px 0", fontStyle: "italic" }}>No foods logged yet</div>}
+
+              {meal.foods.map((food) => (
+                <div key={food.id} style={{ background: "#11111e", border: "1px solid #1e1e32", borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
+                  {editingName && editingName.mealId === meal.id && editingName.foodId === food.id ? (
+                    <input autoFocus value={food.name}
+                      onChange={(e) => updateFood(meal.id, food.id, "name", e.target.value)}
+                      onBlur={() => setEditingName(null)}
+                      onKeyDown={(e) => e.key === "Enter" && setEditingName(null)}
+                      style={{ ...inp, fontSize: 13, fontFamily: "'DM Sans', sans-serif", fontWeight: 600, marginBottom: 6 }} />
+                  ) : (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#ddd" }}
+                        onClick={() => setEditingName({ mealId: meal.id, foodId: food.id })}>{food.name}</span>
+                      <button onClick={() => deleteFood(meal.id, food.id)} style={{ background: "none", border: "none", color: "#333", cursor: "pointer", fontSize: 14 }}>✕</button>
+                    </div>
+                  )}
+
+                  {editingFood && editingFood.mealId === meal.id && editingFood.foodId === food.id ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginTop: 6 }}>
+                      {["calories", "protein", "carbs", "fat", "fiber"].map((field) => (
+                        <div key={field}>
+                          <div style={{ fontSize: 9, color: "#555", marginBottom: 2, textTransform: "uppercase" }}>{field}</div>
+                          <input type="number" value={food[field]} onChange={(e) => updateFood(meal.id, food.id, field, e.target.value)} style={inp} />
+                        </div>
+                      ))}
+                      <button onClick={() => setEditingFood(null)} style={{ gridColumn: "span 5", marginTop: 4, background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#aaa", borderRadius: 6, padding: 5, cursor: "pointer", fontSize: 11 }}>Done</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                      {[{ key: "calories", unit: "cal" }, { key: "protein", unit: "g" }, { key: "carbs", unit: "g" }, { key: "fat", unit: "g" }, { key: "fiber", unit: "g" }].map(({ key, unit }) => (
+                        <div key={key} style={{ textAlign: "center" }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: COLORS[key], fontFamily: "'DM Mono', monospace" }}>{food[key]}<span style={{ fontSize: 9, color: "#444" }}>{unit}</span></div>
+                          <div style={{ fontSize: 9, color: "#444", textTransform: "uppercase" }}>{key === "calories" ? "kcal" : key}</div>
+                        </div>
+                      ))}
+                      <button onClick={() => setEditingFood({ mealId: meal.id, foodId: food.id })} style={{ marginLeft: "auto", background: "none", border: "1px solid #1e1e32", borderRadius: 6, color: "#555", cursor: "pointer", fontSize: 11, padding: "3px 8px" }}>edit</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {addingTo === meal.id && (
+                <div style={{ background: "#0e0e1a", border: "1px dashed #2a2a3e", borderRadius: 12, padding: 14, marginTop: 4 }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, color: "#555", marginBottom: 4, textTransform: "uppercase" }}>Food Name</div>
+                    <input autoFocus placeholder="e.g. Chicken breast" value={newFood.name}
+                      onChange={(e) => setNewFood({ ...newFood, name: e.target.value })}
+                      style={{ ...inp, fontSize: 13 }} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 10 }}>
+                    {["calories", "protein", "carbs", "fat", "fiber"].map((field) => (
+                      <div key={field}>
+                        <div style={{ fontSize: 9, color: "#555", marginBottom: 2, textTransform: "uppercase" }}>{field}</div>
+                        <input type="number" placeholder="0" value={newFood[field]}
+                          onChange={(e) => setNewFood({ ...newFood, [field]: e.target.value })} style={inp} />
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => addFood(meal.id)} style={{ flex: 1, background: "#f97316", border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, padding: 8, cursor: "pointer", fontSize: 12 }}>Add Food</button>
+                    <button onClick={() => { setAddingTo(null); setNewFood(EMPTY_FOOD); }} style={{ background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 8, color: "#666", padding: "8px 12px", cursor: "pointer", fontSize: 12 }}>Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {addingMeal ? (
+            <div style={{ background: "#0e0e1a", border: "1px dashed #2a2a3e", borderRadius: 12, padding: 14 }}>
+              <input autoFocus placeholder="Meal name (e.g. Dinner, Snack)" value={newMealName}
+                onChange={(e) => setNewMealName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addMeal()}
+                style={{ ...inp, fontSize: 13, marginBottom: 10 }} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={addMeal} style={{ flex: 1, background: "#f97316", border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, padding: 8, cursor: "pointer", fontSize: 12 }}>Add Meal</button>
+                <button onClick={() => { setAddingMeal(false); setNewMealName(""); }} style={{ background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 8, color: "#666", padding: "8px 12px", cursor: "pointer", fontSize: 12 }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setAddingMeal(true)} style={{ width: "100%", background: "none", border: "1px dashed #1e1e32", borderRadius: 12, color: "#444", padding: 12, cursor: "pointer", fontSize: 12 }}>+ Add Meal</button>
+          )}
+
+          <div style={{ height: 32 }} />
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<MacroTracker />);
+  </script>
+</body>
+</html>
